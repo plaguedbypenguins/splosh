@@ -9,6 +9,7 @@ setup is pretty simple.
 firstly, copy `pam_user_cgroup` to eg. `/opt/root/` and `chmod +x` it. then edit the script to choose which resources you want users to be able to access and which to keep for the system.
 
 secondly, pick how you want cpus to be allocated to users. if you are being nice to them you would spread their cpus over all available sockets. examples are provided for a hash based deterministic spreading of cores across dual socket nodes with even/odd (eg. skylake) and sequential cpu enumeration (eg. sandy bridgy).eg.
+
     cp hashUserToRange.evenOdd.py /opt/root/hashUserToRange.py
     chmod +x /opt/root/hashUserToRange.py
 
@@ -27,5 +28,4 @@ quirks
 let me know if you want a RHEL6 "shared cgroup" version instead.
 * selinux (eg. on fedora) may disallow pam (and hence this tool) from automatically creating the top level dir. give it a go and see. you may need to make the top level "corral" cgroup for users separately at boot.
 
-Robin Humble
-plaguedbypenguins @ the usual gmail.com
+Robin Humble.  insert this github username @ gmail.com
