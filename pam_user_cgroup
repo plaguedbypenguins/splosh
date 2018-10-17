@@ -1,0 +1,219 @@
+#!/bin/sh
+
+# (c) Robin Humble 2015
+# licensed under the GPLv3 or later.
+
+# a pam_exec module for pam sshd.
+# enforces "fairshare" amongst remote users and helps to protect the OS and
+# daemons from memory and cpu intensive user tasks.
+# designed for use on free-for-all shared servers eg. cluster login nodes.
+#
+# create a "users" cgroup that all ssh users get dropped into. this lets us
+# reserve some cores for the system and set a total memory limit on all user
+# tasks.
+# under this, setup per-user cgroups which enable us to set per-user memory
+# limits or further cpuset limits. by also enabling the "cpu" cgroup we get a
+# "fairshare" style of user access where each user gets a similar fraction of
+# available cpu no matter how many processes or logins they have.
+
+
+# configure these for your system ->
+
+# reserve system cores at the bottom and top of the range. ie. if the system
+# cores are (0 -> N-1) then limit users to (topTailCores -> N-1-topTailCores).
+# core count available to users is thus (N - 2*topTailCores).
+#
+# the idea of reserving system cores at both ends of the range is so that
+# 2-socket machines aren't forced to migrate daemons and drivers away from their
+# optimal irq locations and numa nodes.
+topTailCores=1
+
+# how many cores each user can access
+# users abuse the login nodes by running wide parallel jobs
+# could choose the core range based off hash of username, or random.
+# if random then have to set it once and not change it.
+# use deterministic choice of cores for now.
+# leave this blank to allow access to all cores.
+#coresPerUser=
+coresPerUser=4
+
+# in MB. reserve this amount of memory just for the OS and daemons. limit the
+# total ram for all user processes to (system ram - reservedMem)
+reservedMem=8192
+
+# total % of swap the sum of all users can consume
+percentTotSwap=50
+
+# NOTE: MB overrides % in the below. set MB limit to blank to enable the % limit ->
+#
+# limit each individual user to this % of ram
+percentUserMem=70
+# in MB. limit each individual user to this amount of ram
+perUserMem=
+
+# NOTE: MB overrides % in the below. set MB limit to blank to enable the % limit ->
+#
+# limit each individual user to this % of swap
+percentUserSwap=20
+# in MB. limit each individual user to this amount of swap
+perUserSwap=4096
+
+# mount point for the cgroup
+cgbase="/sys/fs/cgroup"
+
+# name of the users cgroup. can be anything.
+#   NOTE: if you are running selinux then directories of this name in the cgroup
+#         tree(s) MUST be made before sshd logins will succeed.
+#         selinux can prevent us making them here via pam.
+ranch="aardvark"
+
+
+# try to be a little paranoid... doesn't work...?
+#export IFS=
+#export PATH=/usr/bin:/bin
+
+# debug - use with pam line that includes log=/tmp/pam.txt
+debug=0
+if [ $debug -eq 1 ]; then
+   env
+fi
+
+# do nothing for close_session
+if [ "$PAM_TYPE" != "open_session" ]; then
+   exit 0  # PAM_SUCCESS
+fi
+
+# don't constrain daemons or root. only root should be ssh'ing in though... ??
+# 500 is an appropriate uid limit for older systems but newer installs should use 1000.
+# see /etc/login.defs
+id=`id -u "$PAM_USER"`
+if [ $? -ne 0 ]; then
+   exit 4
+fi
+if [ "$id" -lt 500 ]; then
+   exit 0
+fi
+
+# this pam_exec callout has only been written with sshd in mind.
+# assumptions are made about parent processes.
+if [ "$PAM_SERVICE" != "sshd" ]; then
+   exit 4  # PAM_SYSTEM_ERR
+fi
+
+# build the corral
+for cg in cpu memory cpuset; do
+   if [ ! -d $cgbase/$cg/$ranch ]; then
+      mkdir -p $cgbase/$cg/$ranch
+   fi
+done
+for cg in cpu memory cpuset; do
+   if [ ! -d $cgbase/$cg/$ranch ]; then
+      # mkdir doesn't work here 'cos of selinux.
+      # the directory needs to be created before running this.
+      exit 4
+   fi
+done
+
+doSetup=0
+for cg in cpu cpuset memory; do
+   if [ ! -d $cgbase/$cg/$ranch/"$PAM_USER" ]; then
+      doSetup=1
+   fi
+done
+
+# check if the ranch is already setup and don't re-set it up.
+# this is so memory and cpu limits can be set by-hand and will persist.
+if [ $doSetup -eq 1 ]; then
+
+   # compute total and individual user limits for mem and mem+swap
+   swaps=(`free -m | grep Swap:`)
+   swap=${swaps[1]}
+   let swap=$percentTotSwap*$swap/100
+   mems=(`free -m | grep Mem:`)
+   mmax=${mems[1]}
+   # totals
+   let msmax=mmax+$swap
+   let mmax=mmax-$reservedMem
+   # individuals
+   if [ -z "$perUserMem" ]; then  # MB unset, so set MB from %
+      let perUserMem=$percentUserMem*${mems[1]}/100
+   fi
+   if [ -z "$perUserSwap" ]; then  # MB unset, so set MB from %
+      let perUserSwap=$percentUserSwap*${swaps[1]}/100
+   fi
+   let perUserMemSwap=$perUserMem+$perUserSwap
+   # checks
+   if [ $perUserMem -gt $mmax ]; then
+      perUserMem=$mmax
+   fi
+   if [ $perUserMemSwap -gt $msmax ]; then
+      perUserMemSwap=$msmax
+   fi
+   # debug
+   if [ $debug -eq 1 ]; then
+      echo machine mem/swap ${mems[1]},${swaps[1]} - user total mem/mem+swap $mmax,$msmax - individual mem/mem+swap $perUserMem,$perUserMemSwap
+   fi
+
+   # set the users cgroup based off the whole machine except exclude
+   # some first and last cpus, leaving them free for system tasks
+   min=`cat $cgbase/cpuset/cpuset.cpus | cut -d- -f1`
+   max=`cat $cgbase/cpuset/cpuset.cpus | cut -d- -f2`
+   if [ "$max" != "" ]; then
+      let min=min+$topTailCores
+      let max=max-$topTailCores
+   fi
+
+   if [ "$max" != "" ]; then
+      echo $min-$max > $cgbase/cpuset/$ranch/cpuset.cpus 
+   else
+      # handle the (unlikely) case of 1 core machines
+      cat $cgbase/cpuset/cpuset.cpus > $cgbase/cpuset/$ranch/cpuset.cpus
+   fi
+
+   # allow all numa nodes
+   cat $cgbase/cpuset/cpuset.mems > $cgbase/cpuset/$ranch/cpuset.mems
+
+   # let the cgbase access all except reservedMem MB
+   echo  ${mmax}M > $cgbase/memory/$ranch/memory.limit_in_bytes
+   echo ${msmax}M > $cgbase/memory/$ranch/memory.memsw.limit_in_bytes
+
+   # setup a separate corral for each user
+   for cg in cpu cpuset memory; do
+      mkdir -p $cgbase/$cg/$ranch/"$PAM_USER"   # this can be racey if there are heaps of logins so use -p
+   done
+
+   cat $cgbase/cpuset/$ranch/cpuset.mems > $cgbase/cpuset/$ranch/"$PAM_USER"/cpuset.mems
+
+   # set cpuset.cpus for each user
+   if [ "$coresPerUser" = "" ]; then
+      cat $cgbase/cpuset/$ranch/cpuset.cpus > $cgbase/cpuset/$ranch/"$PAM_USER"/cpuset.cpus
+   else
+      # give the user a deterministic pseudo-random set of cores across both sockets
+      r=`/opt/root/hashUserToRange.py "$PAM_USER" $coresPerUser $min $max`
+      if [ $? -ne 0 ]; then
+         exit 4  # PAM_SYSTEM_ERR
+      fi
+      if [ $debug -eq 1 ]; then
+         echo range $r
+      fi
+      echo "$r" > $cgbase/cpuset/$ranch/"$PAM_USER"/cpuset.cpus
+   fi
+
+   # cgroup wants us to set the ram limit before the mem+swap limit
+   echo     ${perUserMem}M > $cgbase/memory/$ranch/"$PAM_USER"/memory.limit_in_bytes
+   echo ${perUserMemSwap}M > $cgbase/memory/$ranch/"$PAM_USER"/memory.memsw.limit_in_bytes
+fi
+
+for cg in cpu cpuset memory; do
+   # our parent PID is the user's sshd [priv]. corral it
+   echo $PPID > $cgbase/$cg/$ranch/"$PAM_USER"/tasks
+done
+
+# debug
+if [ $debug -eq 1 ]; then
+   echo user "$PAM_USER" ppid $PPID tasks
+   cat $cgbase/cpuset/$ranch/"$PAM_USER"/tasks
+   ps -ef | egrep "PPID| $PPID " | grep -v grep
+fi
+
+exit 0
