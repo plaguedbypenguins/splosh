@@ -10,7 +10,7 @@ import sys, hashlib
 # also make sure there's a similar amount of odd and evens so that users have 
 # cores on both sockets.
 #
-# use this even/odd version if lscp says eg.
+# use this even/odd version if lscpu says eg.
 #  NUMA node0 CPU(s):     0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34
 #  NUMA node1 CPU(s):     1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35
 
