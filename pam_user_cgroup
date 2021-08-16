@@ -83,10 +83,13 @@ if [ "$PAM_TYPE" != "open_session" ]; then
    exit 0  # PAM_SUCCESS
 fi
 
+# strip off @ or @ftp etc.
+PU=${PAM_USER%%\@*}
+
 # don't constrain daemons or root. only root should be ssh'ing in though... ??
 # 500 is an appropriate uid limit for older systems but newer installs should use 1000.
 # see /etc/login.defs
-id=`id -u "$PAM_USER"`
+id=`id -u "$PU"`
 if [ $? -ne 0 ]; then
    exit 4
 fi
@@ -116,7 +119,7 @@ done
 
 doSetup=0
 for cg in cpu cpuset memory; do
-   if [ ! -d $cgbase/$cg/$ranch/"$PAM_USER" ]; then
+   if [ ! -d $cgbase/$cg/$ranch/"$PU" ]; then
       doSetup=1
    fi
 done
@@ -179,40 +182,40 @@ if [ $doSetup -eq 1 ]; then
 
    # setup a separate corral for each user
    for cg in cpu cpuset memory; do
-      mkdir -p $cgbase/$cg/$ranch/"$PAM_USER"   # this can be racey if there are heaps of logins so use -p
+      mkdir -p $cgbase/$cg/$ranch/"$PU"   # this can be racey if there are heaps of logins so use -p
    done
 
-   cat $cgbase/cpuset/$ranch/cpuset.mems > $cgbase/cpuset/$ranch/"$PAM_USER"/cpuset.mems
+   cat $cgbase/cpuset/$ranch/cpuset.mems > $cgbase/cpuset/$ranch/"$PU"/cpuset.mems
 
    # set cpuset.cpus for each user
    if [ "$coresPerUser" = "" ]; then
-      cat $cgbase/cpuset/$ranch/cpuset.cpus > $cgbase/cpuset/$ranch/"$PAM_USER"/cpuset.cpus
+      cat $cgbase/cpuset/$ranch/cpuset.cpus > $cgbase/cpuset/$ranch/"$PU"/cpuset.cpus
    else
       # give the user a deterministic pseudo-random set of cores across both sockets
-      r=`/opt/root/hashUserToRange.py "$PAM_USER" $coresPerUser $min $max`
+      r=`/opt/root/hashUserToRange.py "$PU" $coresPerUser $min $max`
       if [ $? -ne 0 ]; then
          exit 4  # PAM_SYSTEM_ERR
       fi
       if [ $debug -eq 1 ]; then
          echo range $r
       fi
-      echo "$r" > $cgbase/cpuset/$ranch/"$PAM_USER"/cpuset.cpus
+      echo "$r" > $cgbase/cpuset/$ranch/"$PU"/cpuset.cpus
    fi
 
    # cgroup wants us to set the ram limit before the mem+swap limit
-   echo     ${perUserMem}M > $cgbase/memory/$ranch/"$PAM_USER"/memory.limit_in_bytes
-   echo ${perUserMemSwap}M > $cgbase/memory/$ranch/"$PAM_USER"/memory.memsw.limit_in_bytes
+   echo     ${perUserMem}M > $cgbase/memory/$ranch/"$PU"/memory.limit_in_bytes
+   echo ${perUserMemSwap}M > $cgbase/memory/$ranch/"$PU"/memory.memsw.limit_in_bytes
 fi
 
 for cg in cpu cpuset memory; do
    # our parent PID is the user's sshd [priv]. corral it
-   echo $PPID > $cgbase/$cg/$ranch/"$PAM_USER"/tasks
+   echo $PPID > $cgbase/$cg/$ranch/"$PU"/tasks
 done
 
 # debug
 if [ $debug -eq 1 ]; then
-   echo user "$PAM_USER" ppid $PPID tasks
-   cat $cgbase/cpuset/$ranch/"$PAM_USER"/tasks
+   echo user "$PAM_USER" "$PU" ppid $PPID tasks
+   cat $cgbase/cpuset/$ranch/"$PU"/tasks
    ps -ef | egrep "PPID| $PPID " | grep -v grep
 fi
 
