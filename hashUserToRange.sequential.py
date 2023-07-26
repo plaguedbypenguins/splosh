@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 
 import sys, hashlib
 
@@ -13,19 +13,22 @@ import sys, hashlib
 #  NUMA node0 CPU(s):     0-5
 #  NUMA node1 CPU(s):     6-11
 
-
-# NOTE - this version will only work for 12 core nodes.
-# edit more below for your node, or better still - send a pull request!
+# NOTE - this version will only work as-is for 12 core nodes.
+# edit the below for your node type.
 
 # should construct this from `lscpu -p` but for now...
 # HACK HACK HACK
 # assume dual 6 core sandybridge
 physcpus=[range(0,6), range(6,12)]
-sockets=len(physcpus)
+
+# or for single socket VMs like eg.
+#  NUMA node0 CPU(s):   0-7
+#
+#physcpus=[range(0,8)]
 
 if len(sys.argv) != 5:
-   print 'usage:', sys.argv[0], 'string X min max'
-   print '   eg. username 4 1 30  ->  7,22,29,30'
+   print('usage:', sys.argv[0], 'string X min max')
+   print('   eg. username 4 1 30  ->  7,22,29,30')
    sys.exit(1)
 
 u = sys.argv[1]   # eg. rjh
@@ -35,8 +38,10 @@ M = int(sys.argv[4])  # 30
 r = M-m+1   # 30
 
 if c > M-m+1:
-   print 'range not big enough'
+   print('range not big enough')
    sys.exit(1)
+
+sockets=len(physcpus)
 
 # allowed cpus
 cpus = []
@@ -46,7 +51,7 @@ for s in range(sockets):
       if i >= m and i <= M:
          cc.append(i)
    cpus.append(cc)
-#print 'allowed cpus', cpus
+#print('allowed cpus', cpus)
 
 # want approx equal on each socket
 cnt = {}
@@ -64,9 +69,9 @@ for i in range(c):
          found=1
       s += 1
       s %= sockets
-#print 'cntmax', cntmax
+#print('cntmax', cntmax)
 
-h = hashlib.sha1(u).hexdigest()
+h = hashlib.sha1(u.encode('ascii')).hexdigest()
 
 # start from least signif bytes
 val = []
@@ -81,12 +86,12 @@ while len(val) != c:
    b = h[l-i-2:l-i]   # pull off 2 bytes at a time == 00 to ff
    rn = int(b, 16)    # 0 to 255
    rn *= len(cpus[s])
-   rn /= 256   # 0 to numberOfCpusOnSocket-1 
+   rn //= 256   # 0 to numberOfCpusOnSocket-1
    rn = cpus[s][rn]
    i += 2
    if i > l-2:
       # ran out of hashes. hash more...
-      h = hashlib.sha1(u*x).hexdigest()
+      h = hashlib.sha1((u*x).encode('ascii')).hexdigest()
       x += 1
       i = 0
       continue
@@ -97,12 +102,12 @@ while len(val) != c:
    if cnt[s] == cntmax[s]:
       s += 1
 
-#print val
+#print(val)
 val.sort()
 s = ''
 for v in val:
    s += '%d,' % v
 s = s[:-1]
 
-print s
+print(s)
 sys.exit(0)

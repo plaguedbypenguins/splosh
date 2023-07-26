@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 
 import sys, hashlib
 
@@ -7,17 +7,12 @@ import sys, hashlib
 #
 # hash a string to generate a deterministic list of X numbers in a given range.
 # used for cpuset allocations on login nodes.
-# also make sure there's a similar amount of odd and evens so that users have 
-# cores on both sockets.
-#
-# use this even/odd version if lscpu says eg.
-#  NUMA node0 CPU(s):     0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34
-#  NUMA node1 CPU(s):     1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35
-
+# also make sure there's a similar amount of odd and evens so that users have cores
+# on both sockets.
 
 if len(sys.argv) != 5:
-   print 'usage:', sys.argv[0], 'string X min max'
-   print '   eg. username 4 1 30  ->  7,22,29,30'
+   print('usage:', sys.argv[0], 'string X min max')
+   print('   eg. username 4 1 30  ->  7,22,29,30')
    sys.exit(1)
 
 u = sys.argv[1]   # eg. rjh
@@ -27,10 +22,10 @@ M = int(sys.argv[4])  # 30
 r = M-m+1   # 30
 
 if c > M-m+1:
-   print 'range not big enough'
+   print('range not big enough')
    sys.exit(1)
 
-h = hashlib.sha1(u).hexdigest()
+h = hashlib.sha1(u.encode('ascii')).hexdigest()
 
 # start from least signif bytes
 val = []
@@ -40,15 +35,16 @@ i = 0
 
 # pick even or odd first
 b = h[l-i-2:l-i]   # pull off 2 bytes at a time == 00 to ff
-even = 2*int(b, 16)/256    # 0 to 1
+even = 2*int(b, 16)//256    # 0 to 1
 i += 2
 
 while len(val) != c:
    b = h[l-i-2:l-i]   # pull off 2 bytes at a time == 00 to ff
    rn = int(b, 16)    # 0 to 255
    rn *= r
-   rn /= 256   # 0 to r-1
+   rn //= 256   # 0 to r-1
    odd = rn % 2
+   #print('even', even, 'odd', odd, 'rn', rn)
    if even == 1 and odd == 1:
       #print 'even', even, 'rn', rn,
       rn += 1
@@ -61,11 +57,11 @@ while len(val) != c:
       rn %= r
       #print 'to', rn
    even += 1
-   even %= 2 
+   even %= 2
    i += 2
    if i > l-2:
       # ran out of hashes. hash more...
-      h = hashlib.sha1(u*x).hexdigest()
+      h = hashlib.sha1((u*x).encode('ascii')).hexdigest()
       x += 1
       i = 0
       continue
@@ -80,5 +76,5 @@ for v in val:
    s += '%d,' % (m+v)
 s = s[:-1]
 
-print s
+print(s)
 sys.exit(0)
